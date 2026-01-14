@@ -15,7 +15,7 @@ def parse_mib(text):
     
     # Unified pattern for TRAP or NOTIFICATION definitions
     trap_pattern = re.compile(
-        r"(?P<name>\w+)\s+(TRAP-TYPE|NOTIFICATION-TYPE)\s+(?P<body>.*?)::=\s*\{[^\}]+\}",
+        r"(?P<name>\w+)\s+(TRAP-TYPE|NOTIFICATION-TYPE)\s+(?P<body>.*?)::=\s*\{(?P<oid>[^\}]+)\}",
         re.DOTALL
     )
     var_pattern = re.compile(r"VARIABLES\s*\{\s*([^\}]+)\s*\}", re.DOTALL)
@@ -25,34 +25,48 @@ def parse_mib(text):
     for match in trap_pattern.finditer(text):
         name = match.group("name")
         body = match.group("body")
+        oid_str = match.group("oid").replace("\n", " ").strip()
         variables = var_pattern.search(body)
         desc = desc_pattern.search(body)
-        variables_str = (
-            variables.group(1).replace("\n", " ").replace(" ", "").strip()
+        variables_list = (
+            [item.strip() for item in variables.group(1).replace("\n", " ").split(",") if item.strip()]
             if variables
-            else ""
+            else []
         )
         desc_str = desc.group(1).replace("\n", " ").strip() if desc else ""
         traps.append({
             "Trap Name": name,
-            "Variables": variables_str,
+            "Trap OID": oid_str,
+            "Variables": ", ".join(variables_list),
             "Description": desc_str,
+            "_variables_list": variables_list,
         })
 
     # Extract OBJECT-TYPE info
     obj_pattern = re.compile(
-        r"(?P<name>\w+)\s+OBJECT-TYPE\s+(?P<body>.*?)::=\s*\{[^\}]+\}",
+        r"(?P<name>\w+)\s+OBJECT-TYPE\s+(?P<body>.*?)::=\s*\{(?P<oid>[^\}]+)\}",
         re.DOTALL
     )
     obj_desc_pattern = re.compile(r"DESCRIPTION\s*\"([^\"]+)\"", re.DOTALL)
 
     objects = []
+    object_oid_map = {}
     for match in obj_pattern.finditer(text):
         obj_name = match.group("name")
         body = match.group("body")
+        oid_str = match.group("oid").replace("\n", " ").strip()
         desc_match = obj_desc_pattern.search(body)
         desc = desc_match.group(1).replace("\n", " ").strip() if desc_match else ""
-        objects.append({"Object Name": obj_name, "Description": desc})
+        object_oid_map[obj_name] = oid_str
+        objects.append({"Object Name": obj_name, "Object OID": oid_str, "Description": desc})
+
+    for trap in traps:
+        variable_oids = [
+            f"{name} ({object_oid_map.get(name, 'OID not found')})"
+            for name in trap["_variables_list"]
+        ]
+        trap["Variable OIDs"] = ", ".join(variable_oids)
+        trap.pop("_variables_list", None)
 
     return pd.DataFrame(traps), pd.DataFrame(objects)
 
