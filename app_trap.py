@@ -1,0 +1,86 @@
+import streamlit as st
+import re
+import pandas as pd
+from io import BytesIO
+
+st.set_page_config(page_title="MIB Parser", layout="wide")
+
+st.title("📘 Huawei eMAP / SNMP MIB Parser (v2)")
+st.write("Upload any `.mib` file to extract **TRAP-TYPE** / **NOTIFICATION-TYPE** and **OBJECT-TYPE** definitions automatically.")
+
+uploaded_file = st.file_uploader("Upload MIB file", type=["mib", "txt"])
+
+def parse_mib(text):
+    """Extract TRAP-TYPE, NOTIFICATION-TYPE, and OBJECT-TYPE definitions."""
+    
+    # Unified pattern for TRAP or NOTIFICATION definitions
+    trap_pattern = re.compile(
+        r"(?P<name>\w+)\s+(TRAP-TYPE|NOTIFICATION-TYPE)\s+(?P<body>.*?)::=\s*\{[^\}]+\}",
+        re.DOTALL
+    )
+    var_pattern = re.compile(r"VARIABLES\s*\{\s*([^\}]+)\s*\}", re.DOTALL)
+    desc_pattern = re.compile(r"DESCRIPTION\s*\"([^\"]+)\"", re.DOTALL)
+
+    traps = []
+    for match in trap_pattern.finditer(text):
+        name = match.group("name")
+        body = match.group("body")
+        variables = var_pattern.search(body)
+        desc = desc_pattern.search(body)
+        variables_str = (
+            variables.group(1).replace("\n", " ").replace(" ", "").strip()
+            if variables
+            else ""
+        )
+        desc_str = desc.group(1).replace("\n", " ").strip() if desc else ""
+        traps.append({
+            "Trap Name": name,
+            "Variables": variables_str,
+            "Description": desc_str,
+        })
+
+    # Extract OBJECT-TYPE info
+    obj_pattern = re.compile(
+        r"(?P<name>\w+)\s+OBJECT-TYPE\s+(?P<body>.*?)::=\s*\{[^\}]+\}",
+        re.DOTALL
+    )
+    obj_desc_pattern = re.compile(r"DESCRIPTION\s*\"([^\"]+)\"", re.DOTALL)
+
+    objects = []
+    for match in obj_pattern.finditer(text):
+        obj_name = match.group("name")
+        body = match.group("body")
+        desc_match = obj_desc_pattern.search(body)
+        desc = desc_match.group(1).replace("\n", " ").strip() if desc_match else ""
+        objects.append({"Object Name": obj_name, "Description": desc})
+
+    return pd.DataFrame(traps), pd.DataFrame(objects)
+
+if uploaded_file:
+    mib_text = uploaded_file.read().decode("utf-8", errors="ignore")
+    df_traps, df_objects = parse_mib(mib_text)
+
+    st.success(f"✅ Parsed successfully! Found {len(df_traps)} traps and {len(df_objects)} objects.")
+
+    tab1, tab2 = st.tabs(["📡 Trap / Notification Definitions", "🧩 Object (Varbind) Definitions"])
+
+    with tab1:
+        st.dataframe(df_traps, use_container_width=True)
+
+    with tab2:
+        st.dataframe(df_objects, use_container_width=True)
+
+    # Export to Excel
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_traps.to_excel(writer, index=False, sheet_name="Traps")
+        df_objects.to_excel(writer, index=False, sheet_name="Objects")
+
+    st.download_button(
+        label="📥 Download Parsed Excel",
+        data=output.getvalue(),
+        file_name="Parsed_MIB.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+else:
+    st.info("Please upload a MIB file to begin parsing.")
