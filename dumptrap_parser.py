@@ -11,6 +11,15 @@ SEVERITY_MAP = {
     6: "Cleared"
 }
 
+TRAP_OID_PREFIX = "1.3.6.1.4.1.2011.6.164.2.1.0"
+ALARM_NAME_PREFIX = "1.3.6.1.4.1.2011.6.164.1.1.2.100.1.2"
+SEVERITY_PREFIX = "1.3.6.1.4.1.2011.6.164.1.1.2.100.1.3"
+DESCRIPTION_PREFIX = "1.3.6.1.4.1.2011.6.164.1.1.2.100.1.4"
+SUBSYSTEM_PREFIXES = (
+    "1.3.6.1.4.1.2011.6.164.1.5.2.1.1.3",
+    "1.3.6.1.4.1.2011.6.164.1.4.1.2.0",
+)
+
 def get_event_state(trap_oid: str):
     try:
         last = int(trap_oid.split('.')[-1])
@@ -18,9 +27,20 @@ def get_event_state(trap_oid: str):
     except Exception:
         return "Unknown"
 
+def parse_varbinds(block: str):
+    varbinds = {}
+    for oid, value in re.findall(r'([.]?\d+(?:\.\d+)+)=(".*?"|[^ ]+)', block):
+        cleaned_oid = oid.lstrip(".")
+        cleaned_value = value.strip()
+        if cleaned_value.startswith('"') and cleaned_value.endswith('"'):
+            cleaned_value = cleaned_value[1:-1]
+        varbinds[cleaned_oid] = cleaned_value
+    return varbinds
+
 def parse_trap_block(block: str):
     """Parse a single trap block"""
-    parsed = {}
+    parsed = {"variables": {}}
+    varbinds = parse_varbinds(block)
     trap_oid_match = re.search(r'1\.3\.6\.1\.4\.1\.2011\.6\.164\.2\.1\.0\.\d+', block)
     if trap_oid_match:
         trap_oid = trap_oid_match.group(0)
@@ -44,9 +64,25 @@ def parse_trap_block(block: str):
         parsed["description"] = desc_match.group(1)
 
     # Subsystem
-    subsystem_match = re.search(r'1\.3\.6\.1\.4\.1\.2011\.6\.164\.1\.4\.1\.2\.0="([^"]+)"', block)
+    subsystem_match = re.search(
+        r'1\.3\.6\.1\.4\.1\.2011\.6\.164\.(?:1\.5\.2\.1\.1\.3\.\d+|1\.4\.1\.2\.0)="([^"]+)"',
+        block
+    )
     if subsystem_match:
         parsed["subsystem"] = subsystem_match.group(1)
+
+    for oid, value in varbinds.items():
+        if oid.startswith(TRAP_OID_PREFIX):
+            continue
+        if oid.startswith(ALARM_NAME_PREFIX):
+            continue
+        if oid.startswith(SEVERITY_PREFIX):
+            continue
+        if oid.startswith(DESCRIPTION_PREFIX):
+            continue
+        if oid.startswith(SUBSYSTEM_PREFIXES):
+            continue
+        parsed["variables"][oid] = value
 
     return parsed if parsed else None
 

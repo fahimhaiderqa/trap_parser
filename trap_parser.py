@@ -22,6 +22,15 @@ SEVERITY_MAP = {
 }
 
 # === 3. Helper functions ===
+TRAP_OID_PREFIX = "1.3.6.1.4.1.2011.6.164.2.1.0"
+ALARM_NAME_PREFIX = "1.3.6.1.4.1.2011.6.164.1.1.2.100.1.2"
+SEVERITY_PREFIX = "1.3.6.1.4.1.2011.6.164.1.1.2.100.1.3"
+DESCRIPTION_PREFIX = "1.3.6.1.4.1.2011.6.164.1.1.2.100.1.4"
+SUBSYSTEM_PREFIXES = (
+    "1.3.6.1.4.1.2011.6.164.1.5.2.1.1.3",
+    "1.3.6.1.4.1.2011.6.164.1.4.1.2.0",
+)
+
 def get_event_state(trap_oid):
     try:
         last = int(trap_oid.split('.')[-1])
@@ -34,17 +43,17 @@ def parse_trap(varBinds):
     for oid, val in varBinds:
         oid_str = str(oid)
         value = str(val.prettyPrint())
-        if "1.3.6.1.4.1.2011.6.164.2.1.0" in oid_str:
+        if oid_str.startswith(TRAP_OID_PREFIX):
             parsed["trap_oid"] = oid_str
             parsed["event_state"] = get_event_state(oid_str)
-        elif ".1.1.2.100.1.2." in oid_str:
+        elif oid_str.startswith(ALARM_NAME_PREFIX):
             parsed["alarm_name"] = value
-        elif ".1.1.2.100.1.3." in oid_str:
+        elif oid_str.startswith(SEVERITY_PREFIX):
             sev = int(value) if value.isdigit() else 0
             parsed["severity"] = SEVERITY_MAP.get(sev, f"Unknown({value})")
-        elif ".1.1.2.100.1.4." in oid_str:
+        elif oid_str.startswith(DESCRIPTION_PREFIX):
             parsed["description"] = value
-        elif ".1.5.2.1.1.3." in oid_str:
+        elif oid_str.startswith(SUBSYSTEM_PREFIXES):
             parsed["subsystem"] = value
         else:
             parsed["variables"][oid_str] = value
