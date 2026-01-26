@@ -103,6 +103,6 @@ def parse_trap_file(file_path):
     return traps
 
 if __name__ == "__main__":
-    traps = parse_trap_file("traps_dump.txt")
+    traps = parse_trap_file("traps.txt")
     print(json.dumps(traps, indent=2, ensure_ascii=False))
     print(f"\nTotal traps parsed: {len(traps)}")
