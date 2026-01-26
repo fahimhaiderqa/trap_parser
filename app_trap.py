@@ -6,18 +6,36 @@ import inspect
 
 st.set_page_config(page_title="MIB Parser", layout="wide")
 
-st.title("📘 Huawei eMAP / SNMP MIB Parser (v2)")
-st.write("Upload any `.mib` file to extract **TRAP-TYPE** / **NOTIFICATION-TYPE** and **OBJECT-TYPE** definitions automatically.")
+st.title("MIB Trap Parser")
+st.write(
+    "Upload reference MIBs for OID resolution, then upload primary MIBs to extract traps and objects."
+)
 
-uploaded_file = st.file_uploader("Upload MIB file", type=["mib", "txt"])
+reference_files = st.file_uploader(
+    "Upload reference MIBs (for OID resolution)",
+    type=["mib", "txt"],
+    accept_multiple_files=True,
+    key="reference_mibs",
+)
+primary_files = st.file_uploader(
+    "Upload primary MIBs (extract traps/objects)",
+    type=["mib", "txt"],
+    accept_multiple_files=True,
+    key="primary_mibs",
+)
+include_reference_objects = st.checkbox(
+    "Include objects from reference MIBs in Objects tab",
+    value=False,
+)
 
-def parse_mib(text):
+def parse_mib(primary_texts, reference_texts, include_reference_objects):
     """Extract TRAP-TYPE, NOTIFICATION-TYPE, and OBJECT-TYPE definitions."""
-    
+    all_texts = list(reference_texts) + list(primary_texts)
+
     # Unified pattern for TRAP or NOTIFICATION definitions
     trap_pattern = re.compile(
         r"(?P<name>\w+)\s+(TRAP-TYPE|NOTIFICATION-TYPE)\s+(?P<body>.*?)::=\s*\{(?P<oid>[^\}]+)\}",
-        re.DOTALL
+        re.DOTALL,
     )
     var_pattern = re.compile(r"(?:VARIABLES|OBJECTS)\s*\{\s*([^\}]+)\s*\}", re.DOTALL)
     desc_pattern = re.compile(r"DESCRIPTION\s*\"([^\"]+)\"", re.DOTALL)
@@ -38,7 +56,6 @@ def parse_mib(text):
         "experimental": ["1", "3", "6", "1", "3"],
         "private": ["1", "3", "6", "1", "4"],
         "enterprises": ["1", "3", "6", "1", "4", "1"],
-        "huaweiUtility": ["1", "3", "6", "1", "4", "1", "2011", "6"],
     }
 
     def normalize_oid(oid_str):
@@ -72,64 +89,91 @@ def parse_mib(text):
         return ".".join(tokens)
 
     oid_defs = dict(base_oid_defs)
-    for match in oid_def_pattern.finditer(text):
-        name = match.group("name")
-        oid_defs[name] = normalize_oid(match.group("oid"))
+    for text in all_texts:
+        for match in oid_def_pattern.finditer(text):
+            name = match.group("name")
+            oid_defs[name] = normalize_oid(match.group("oid"))
 
     obj_pattern = re.compile(
         r"(?P<name>\w+)\s+OBJECT-TYPE\s+(?P<body>.*?)::=\s*\{(?P<oid>[^\}]+)\}",
-        re.DOTALL
+        re.DOTALL,
     )
     obj_desc_pattern = re.compile(r"DESCRIPTION\s*\"([^\"]+)\"", re.DOTALL)
-    obj_matches = list(obj_pattern.finditer(text))
-    for match in obj_matches:
-        obj_name = match.group("name")
-        oid_defs.setdefault(obj_name, normalize_oid(match.group("oid")))
+
+    all_obj_matches = []
+    primary_obj_matches = []
+
+    for text in reference_texts:
+        for match in obj_pattern.finditer(text):
+            obj_name = match.group("name")
+            oid_defs.setdefault(obj_name, normalize_oid(match.group("oid")))
+            all_obj_matches.append(match)
+
+    for text in primary_texts:
+        for match in obj_pattern.finditer(text):
+            obj_name = match.group("name")
+            oid_defs.setdefault(obj_name, normalize_oid(match.group("oid")))
+            all_obj_matches.append(match)
+            primary_obj_matches.append(match)
 
     traps = []
-    for match in trap_pattern.finditer(text):
-        name = match.group("name")
-        body = match.group("body")
+    for text in primary_texts:
+        for match in trap_pattern.finditer(text):
+            name = match.group("name")
+            body = match.group("body")
+            oid_str = match.group("oid").replace("\n", " ").strip()
+            variables = var_pattern.search(body)
+            desc = desc_pattern.search(body)
+            variables_list = (
+                [
+                    item.strip()
+                    for item in variables.group(1).replace("\n", " ").split(",")
+                    if item.strip()
+                ]
+                if variables
+                else []
+            )
+            desc_str = desc.group(1).replace("\n", " ").strip() if desc else ""
+            oid_tokens = normalize_oid(oid_str)
+            resolved_tokens = resolve_oid_tokens(oid_tokens, oid_defs)
+            resolved_oid = format_oid(resolved_tokens)
+            traps.append(
+                {
+                    "Trap Name": name,
+                    "Trap OID": oid_str,
+                    "Trap OID Resolved": resolved_oid,
+                    "Variables": ", ".join(variables_list),
+                    "Description": desc_str,
+                    "_variables_list": variables_list,
+                }
+            )
+
+    # Extract OBJECT-TYPE info
+    object_oid_map = {}
+    for match in all_obj_matches:
+        obj_name = match.group("name")
         oid_str = match.group("oid").replace("\n", " ").strip()
-        variables = var_pattern.search(body)
-        desc = desc_pattern.search(body)
-        variables_list = (
-            [item.strip() for item in variables.group(1).replace("\n", " ").split(",") if item.strip()]
-            if variables
-            else []
-        )
-        desc_str = desc.group(1).replace("\n", " ").strip() if desc else ""
         oid_tokens = normalize_oid(oid_str)
         resolved_tokens = resolve_oid_tokens(oid_tokens, oid_defs)
         resolved_oid = format_oid(resolved_tokens)
-        traps.append({
-            "Trap Name": name,
-            "Trap OID": oid_str,
-            "Trap OID Resolved": resolved_oid,
-            "Variables": ", ".join(variables_list),
-            "Description": desc_str,
-            "_variables_list": variables_list,
-        })
+        object_oid_map[obj_name] = resolved_oid
 
-    # Extract OBJECT-TYPE info
     objects = []
-    object_oid_map = {}
-    for match in obj_matches:
+    output_obj_matches = all_obj_matches if include_reference_objects else primary_obj_matches
+    for match in output_obj_matches:
         obj_name = match.group("name")
         body = match.group("body")
         oid_str = match.group("oid").replace("\n", " ").strip()
         desc_match = obj_desc_pattern.search(body)
         desc = desc_match.group(1).replace("\n", " ").strip() if desc_match else ""
-        oid_tokens = normalize_oid(oid_str)
-        resolved_tokens = resolve_oid_tokens(oid_tokens, oid_defs)
-        resolved_oid = format_oid(resolved_tokens)
-        object_oid_map[obj_name] = resolved_oid
-        objects.append({
-            "Object Name": obj_name,
-            "Object OID": oid_str,
-            "Object OID Resolved": resolved_oid,
-            "Description": desc,
-        })
+        objects.append(
+            {
+                "Object Name": obj_name,
+                "Object OID": oid_str,
+                "Object OID Resolved": object_oid_map.get(obj_name, "OID not found"),
+                "Description": desc,
+            }
+        )
 
     for trap in traps:
         variable_oids = [
@@ -141,13 +185,25 @@ def parse_mib(text):
 
     return pd.DataFrame(traps), pd.DataFrame(objects)
 
-if uploaded_file:
-    mib_text = uploaded_file.read().decode("utf-8", errors="ignore")
-    df_traps, df_objects = parse_mib(mib_text)
+def read_uploaded_files(uploaded_files):
+    texts = []
+    for uploaded_file in uploaded_files or []:
+        texts.append(uploaded_file.read().decode("utf-8", errors="ignore"))
+    return texts
 
-    st.success(f"✅ Parsed successfully! Found {len(df_traps)} traps and {len(df_objects)} objects.")
+reference_texts = read_uploaded_files(reference_files)
+primary_texts = read_uploaded_files(primary_files)
 
-    tab1, tab2 = st.tabs(["📡 Trap / Notification Definitions", "🧩 Object (Varbind) Definitions"])
+if primary_texts:
+    df_traps, df_objects = parse_mib(
+        primary_texts,
+        reference_texts,
+        include_reference_objects,
+    )
+
+    st.success(f"Parsed successfully! Found {len(df_traps)} traps and {len(df_objects)} objects.")
+
+    tab1, tab2 = st.tabs(["Trap / Notification Definitions", "Object (Varbind) Definitions"])
 
     with tab1:
         dataframe_kwargs = {"use_container_width": True}
@@ -185,10 +241,10 @@ if uploaded_file:
         df_objects.to_excel(writer, index=False, sheet_name="Objects")
 
     st.download_button(
-        label="📥 Download Parsed Excel",
+        label="Download Parsed Excel",
         data=output.getvalue(),
         file_name="Parsed_MIB.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 else:
-    st.info("Please upload a MIB file to begin parsing.")
+    st.info("Please upload at least one primary MIB file to begin parsing.")
